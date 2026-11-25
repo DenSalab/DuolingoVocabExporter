@@ -1,74 +1,115 @@
 /*
  * Duolingo Vocab Exporter
- * Created by Ruddick Lawrence
- * ===========================
- * Javascript to create CSV vocab lists from
- * Duolingo vocab pages. Assumes jQuery is
- * loaded and a certain structure for the
- * vocab page (so it will break every
- * redesign they do).
+ * Updated for the current Duolingo vocabulary page
  */
-(function() {
 
-  function scrapeVocab() {
-    var vocab = [];
-    // Get words and translations
-    var wordRows = $('table.vocabulary > tbody').children('tr');
-    wordRows.each(function(index, row) {
-      var $row = $(row);
-      var wordInfo = null;
-      // A new word
-      if($row.hasClass('first-lemma-row')) {
-        var canonicalWord = $row.find('td:first a').text();
-        wordInfo = {
-          canonical: canonicalWord,
-          otherForms: [],
-          translations: []
-        };
-        vocab.push(wordInfo);
-      }
-      // Another form of previous word
-      else {
-        wordInfo = vocab[vocab.length-1];
-      }
+(async function () {
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-      var lexeme = $row.children('td.lexeme');
-      var form = lexeme.find('.token').text();
-      if(form != wordInfo.canonical) {
-        wordInfo.otherForms.push(form);
+  // Store collected words and translations
+  const vocab = new Map();
+
+  // Collect words from the current DOM
+  function collectVocab() {
+    document.querySelectorAll('.AeY9P').forEach(element => {
+      const word = element.querySelector('h3')?.textContent.trim();
+      const translation = element.querySelector('p')?.textContent.trim();
+
+      if (word && translation) {
+        vocab.set(word, translation);
       }
-      lexeme.find('tbody tr:not(.hidden) td').each(function(index, td) {
-        wordInfo.translations.push($(td).text().trim());
-      });
     });
-
-    // Format vocab list
-    var csv = "";
-    $.each(vocab, function(index, item) {
-      var words = item.canonical + (item.otherForms.length !== 0 ? ", " + item.otherForms.join(', ') : "");
-      var row = '"' + words + '","' + item.translations.join(', ') + '"\n';
-      csv += row;
-    });
-
-    // Display list
-    var pre = $('<pre>');
-    pre.text(csv);
-    $('body').children().remove();
-    $('body').append(pre);
   }
 
-  function scrollDown() {
-    // Indicates all words are loaded
-    if($('#vocab-spinner').length === 0) {
-      // Give a little time for last vocab to load
-      // Should really just check if it's there, but whatever...
-      setTimeout(scrapeVocab, 1000);
-    }
-    else {
-      $(document).scrollTop($(document).height());
-      setTimeout(scrollDown, 100);
-    }
+  // Find the "Load more" button
+  function findLoadMoreButton() {
+    return [...document.querySelectorAll('[role="button"]')]
+      .find(element =>
+        element.textContent.includes('Загрузить больше')
+      );
   }
 
-  scrollDown();
+  let idleCycles = 0;
+  let clicks = 0;
+
+  collectVocab();
+
+  // Load more words until no new batches are available
+  while (idleCycles < 8) {
+    const button = findLoadMoreButton();
+
+    if (!button) {
+      idleCycles++;
+      await sleep(1500);
+      collectVocab();
+
+      continue;
+    }
+
+    idleCycles = 0;
+
+    const wordsBefore = vocab.size;
+
+    button.scrollIntoView({
+      behavior: 'instant',
+      block: 'center'
+    });
+
+    await sleep(300);
+
+    button.click();
+    clicks++;
+
+    // Wait for new words to appear
+    for (let i = 0; i < 40; i++) {
+      await sleep(500);
+      collectVocab();
+
+      if (vocab.size > wordsBefore) {
+        console.log(`Collected: ${vocab.size} words`);
+        break;
+      }
+
+      if (!findLoadMoreButton()) {
+        break;
+      }
+    }
+
+    await sleep(1000);
+  }
+
+  // Collect all remaining words
+  collectVocab();
+
+  // Generate CSV content
+  const csv = [
+    ['word', 'translation'],
+    ...vocab.entries()
+  ]
+    .map(row =>
+      row
+        .map(value =>
+          `"${String(value).replace(/"/g, '""')}"`
+        )
+        .join(';')
+    )
+    .join('\r\n');
+
+  // Create the CSV file
+  const blob = new Blob(['\uFEFF' + csv], {
+    type: 'text/csv;charset=utf-8'
+  });
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  link.href = url;
+  link.download = 'duolingo_vocabulary_full.csv';
+
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+
+  // Release the temporary object URL
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
 })();
